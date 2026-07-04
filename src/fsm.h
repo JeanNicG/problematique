@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-// Recepteur FSM
+// Emetteur FSM
 enum class EtatEmetteur {Initialisation, FluxContinu, Fermeture};
 enum class EventTypeEmetteur {DemarrerSession, NackIntercepte, TousPaquetsValides, FermetureSession};
 struct EventEmetteur {

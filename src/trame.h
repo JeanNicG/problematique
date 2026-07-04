@@ -2,7 +2,6 @@
 #include <cstddef>
 #include <cstdint>
 
-
 enum TypeCommunication: uint8_t {
     Debut = 0x01,
     Data = 0x02,
@@ -28,7 +27,3 @@ class __attribute__((packed)) Trame{
         uint8_t end = 0x7E;
         Trame(TypeCommunication type, uint8_t numero_sequence, uint8_t volume, uint8_t payload[80]);
 };
-
-const char* typeToString(TypeCommunication type);
-void printBytes(const uint8_t* data, size_t length);
-void printTrame(const char* tag, const Trame& trame);

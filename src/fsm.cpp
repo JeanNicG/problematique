@@ -11,7 +11,7 @@ void Emetteur::handleEvent(EventEmetteur e) {
             break;
         case EtatEmetteur::FluxContinu:
             if (e.type == EventTypeEmetteur::NackIntercepte) {
-                numero_sequence = e.data.sequence_manquante;
+                numero_sequence = e.data.sequence_manquante - 1;
             }
             if (e.type == EventTypeEmetteur::TousPaquetsValides) {
                 etat = EtatEmetteur::Fermeture;
