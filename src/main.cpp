@@ -48,14 +48,14 @@ void sendTrame(const Trame &trame) {
 	if (tx_mutex != NULL) {
 		xSemaphoreTake(tx_mutex, portMAX_DELAY);
 	}
-	printTrame("[TX]", trame);
+	//printTrame("[TX]", trame);
 
 	const uint8_t *trame_bytes = reinterpret_cast<const uint8_t *>(&trame);
 	const size_t trame_size = sizeof(Trame);
 
 	uint32_t cycles_per_half_bit = ESP.getCpuFreqMHz() * HALF_BIT_US;
 	
-	vTaskSuspendAll();
+	noInterrupts();
 
 	uint32_t next_edge = ESP.getCycleCount();
 
@@ -83,7 +83,7 @@ void sendTrame(const Trame &trame) {
 	}
 	
 	GPIO.out_w1tc = (1 << TX_PIN);
-	xTaskResumeAll();
+	interrupts();
 	
 	if (tx_mutex != NULL) {
 		xSemaphoreGive(tx_mutex);
@@ -175,6 +175,7 @@ void txTask(void *pvParameters) {
 			case EtatEmetteur::Initialisation: {
 				Trame trame_debut(TypeCommunication::Debut, 0, TOTAL_PAQUETS, nullptr);
 				sendTrame(trame_debut);
+				vTaskDelay(pdMS_TO_TICKS(50));
 				emetteur.handleEvent({EventTypeEmetteur::DemarrerSession, {}});
 				break;
 			}
