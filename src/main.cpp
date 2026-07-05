@@ -34,7 +34,7 @@ volatile uint32_t rx_edge_times[1500];
 volatile int rx_edge_count = 0;
 volatile uint32_t rx_last_edge_time = 0;
 
-void IRAM_ATTR rx_gpio_isr(void *arg) {
+void IRAM_ATTR rx_gpio_isr() {
 	uint32_t now = esp_timer_get_time();
 	if (rx_edge_count < 1500) {
 		rx_edge_times[rx_edge_count++] = now;
@@ -278,13 +278,11 @@ void setup() {
 	Serial.begin(115200);
 	delay(1000);
 
-	gpio_reset_pin(TX_PIN);
-	gpio_set_direction(TX_PIN, GPIO_MODE_OUTPUT);
-	gpio_set_level(TX_PIN, 0);
+	pinMode(TX_PIN, OUTPUT);
+	digitalWrite(TX_PIN, LOW);
 
-	gpio_set_intr_type(RX_PIN, GPIO_INTR_ANYEDGE);
-	gpio_install_isr_service(0);
-	gpio_isr_handler_add(RX_PIN, rx_gpio_isr, NULL);
+	pinMode(RX_PIN, INPUT);
+	attachInterrupt(digitalPinToInterrupt(RX_PIN), rx_gpio_isr, CHANGE);
 
 	xTaskCreatePinnedToCore(txTask, "TX_Task", 8192, NULL, 1, NULL, 1);
 	xTaskCreatePinnedToCore(rxTask, "RX_Task", 8192, NULL, 1, NULL, 0);
