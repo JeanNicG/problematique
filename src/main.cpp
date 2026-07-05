@@ -21,6 +21,8 @@ const char *donnees_txt[TOTAL_PAQUETS] = {
   "Ligne 5 - 2026-06-17 10:20:01 | Temp: 23.0 C | Humidite: 45.0 % | Node: 01"
 };
 
+SemaphoreHandle_t tx_mutex;
+
 volatile bool nack_received = false;
 volatile uint8_t nack_sequence = 0;
 bool ENABLE_ERROR_SIMULATION = false;
@@ -43,7 +45,10 @@ void IRAM_ATTR rx_gpio_isr() {
 }
 
 void sendTrame(const Trame &trame) {
-	//printTrame("[TX]", trame);
+	if (tx_mutex != NULL) {
+		xSemaphoreTake(tx_mutex, portMAX_DELAY);
+	}
+	printTrame("[TX]", trame);
 
 	const uint8_t *trame_bytes = reinterpret_cast<const uint8_t *>(&trame);
 	const size_t trame_size = sizeof(Trame);
@@ -80,7 +85,9 @@ void sendTrame(const Trame &trame) {
 	GPIO.out_w1tc = (1 << TX_PIN);
 	xTaskResumeAll();
 	
-	vTaskDelay(pdMS_TO_TICKS(50));
+	if (tx_mutex != NULL) {
+		xSemaphoreGive(tx_mutex);
+	}
 }
 
 Trame receiveTrame() {
@@ -190,7 +197,7 @@ void txTask(void *pvParameters) {
 					
 					sendTrame(trame);
 					emetteur.setNumeroSequence(emetteur.getNumeroSequence() + 1);
-					vTaskDelay(pdMS_TO_TICKS(5));
+					vTaskDelay(pdMS_TO_TICKS(50));
 				}
 				if (emetteur.getNumeroSequence() >= TOTAL_PAQUETS) {
 					emetteur.handleEvent({EventTypeEmetteur::TousPaquetsValides, {}});
@@ -237,8 +244,6 @@ void rxTask(void *pvParameters) {
 			else if (trame.entete.type == TypeCommunication::Data) {
 				if (trame.entete.numero_sequence != recepteur.getNumeroSequenceAttendu() || 
 					trame.crc16 != esp_rom_crc16_be(0, trame.payload, 80)) {
-					nack_sequence = recepteur.getNumeroSequenceAttendu();
-					nack_received = true;
 					Trame nack(TypeCommunication::Nack, 0, recepteur.getNumeroSequenceAttendu(), nullptr);
 					sendTrame(nack);
 					recepteur.handleEvent({EventTypeRecepteur::TrameHorsSequence, {}});
@@ -267,8 +272,6 @@ void rxTask(void *pvParameters) {
 				recepteur.setNumeroSequenceAttendu(recepteur.getNumeroSequenceAttendu() + 1);
 				recepteur.handleEvent({EventTypeRecepteur::ErreurCorrigee, {}});
 			} else if (trame_corrigee.entete.type == TypeCommunication::Data) {
-				nack_sequence = recepteur.getNumeroSequenceAttendu();
-				nack_received = true;
 				Trame nack(TypeCommunication::Nack, 0, recepteur.getNumeroSequenceAttendu(), nullptr);
 				sendTrame(nack);
 			}
@@ -282,6 +285,8 @@ void setup() {
 	Serial.setTxBufferSize(2048);
 	Serial.begin(115200);
 	delay(1000);
+
+	tx_mutex = xSemaphoreCreateMutex();
 
 	xTaskCreatePinnedToCore(txTask, "TX_Task", 8192, NULL, 1, NULL, 1);
 	xTaskCreatePinnedToCore(rxTask, "RX_Task", 8192, NULL, 1, NULL, 0);
