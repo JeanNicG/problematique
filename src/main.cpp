@@ -2,6 +2,7 @@
 #include "fsm.h"
 #include "trame.h"
 #include "helper.h"
+#include "esp_rom_crc.h"
 #include <Arduino.h>
 
 #include <cstring>
@@ -22,6 +23,9 @@ const char *donnees_txt[TOTAL_PAQUETS] = {
 
 volatile bool nack_received = false;
 volatile uint8_t nack_sequence = 0;
+bool ENABLE_ERROR_SIMULATION = true;
+bool simulate_error = ENABLE_ERROR_SIMULATION;
+int target_packet_error = 3;
 
 void IRAM_ATTR gestionnaireSignal() { nack_received = true; }
 
@@ -170,11 +174,18 @@ void txTask(void *pvParameters) {
 					if (nack_received) {
 						nack_received = false;
 						emetteur.handleEvent({EventTypeEmetteur::NackIntercepte, {nack_sequence}});
+						vTaskDelay(pdMS_TO_TICKS(60));
 						break;
 					}
 					uint8_t payload[80] = {0};
 					strncpy(reinterpret_cast<char *>(payload),donnees_txt[emetteur.getNumeroSequence()], 80);
 					Trame trame(TypeCommunication::Data, emetteur.getNumeroSequence() + 1, TOTAL_PAQUETS, payload);
+					
+					if (simulate_error && (emetteur.getNumeroSequence() + 1) == target_packet_error) {
+						trame.payload[random(80)] ^= (1 << random(8));
+						simulate_error = false;
+					}
+					
 					sendTrame(trame);
 					emetteur.setNumeroSequence(emetteur.getNumeroSequence() + 1);
 					vTaskDelay(pdMS_TO_TICKS(5));
@@ -188,7 +199,10 @@ void txTask(void *pvParameters) {
 				Trame trame_fin(TypeCommunication::Fin, emetteur.getNumeroSequence() + 1, TOTAL_PAQUETS, nullptr);
 				sendTrame(trame_fin);
 				vTaskDelay(pdMS_TO_TICKS(2000));
-				vTaskDelete(NULL);
+				emetteur.setNumeroSequence(0);
+				simulate_error = ENABLE_ERROR_SIMULATION;
+				emetteur.handleEvent({EventTypeEmetteur::FermetureSession, {}});
+				break;
 			}
 		}
 	}
@@ -211,11 +225,17 @@ void rxTask(void *pvParameters) {
 		}
 		case EtatRecepteur::ReceptionContinue: {
 			Trame trame = receiveTrame();
-			if (trame.entete.type == TypeCommunication::Data) {
+			if (trame.entete.type == TypeCommunication::Nack) {
+				nack_sequence = trame.entete.volume;
+				nack_received = true;
+			}
+			else if (trame.entete.type == TypeCommunication::Data) {
 				if (trame.entete.numero_sequence != recepteur.getNumeroSequenceAttendu() || 
 					trame.crc16 != esp_rom_crc16_be(0, trame.payload, 80)) {
 					nack_sequence = recepteur.getNumeroSequenceAttendu();
 					nack_received = true;
+					Trame nack(TypeCommunication::Nack, 0, recepteur.getNumeroSequenceAttendu(), nullptr);
+					sendTrame(nack);
 					recepteur.handleEvent({EventTypeRecepteur::TrameHorsSequence, {}});
 					break;
 				} else {
@@ -223,7 +243,7 @@ void rxTask(void *pvParameters) {
 					recepteur.setNumeroSequenceAttendu(recepteur.getNumeroSequenceAttendu() + 1);
 				}
 			}
-			if (trame.entete.type == TypeCommunication::Fin) {
+			else if (trame.entete.type == TypeCommunication::Fin) {
 				recordtrame(0, sizeof(Trame));
 				printBitrate();
 				recepteur.handleEvent({EventTypeRecepteur::ReceptionTrameFin, {}});
@@ -232,11 +252,20 @@ void rxTask(void *pvParameters) {
 		}
 		case EtatRecepteur::AttenteDeCorrection: {
 			Trame trame_corrigee = receiveTrame();
-			if (trame_corrigee.entete.numero_sequence ==
-				recepteur.getNumeroSequenceAttendu()) {
+			if (trame_corrigee.entete.type == TypeCommunication::Nack) {
+				nack_sequence = trame_corrigee.entete.volume;
+				nack_received = true;
+			}
+			else if (trame_corrigee.entete.numero_sequence == recepteur.getNumeroSequenceAttendu() &&
+				trame_corrigee.crc16 == esp_rom_crc16_be(0, trame_corrigee.payload, 80)) {
 				recordtrame(trame_corrigee.entete.longueur_payload, sizeof(Trame));
 				recepteur.setNumeroSequenceAttendu(recepteur.getNumeroSequenceAttendu() + 1);
 				recepteur.handleEvent({EventTypeRecepteur::ErreurCorrigee, {}});
+			} else if (trame_corrigee.entete.type == TypeCommunication::Data) {
+				nack_sequence = recepteur.getNumeroSequenceAttendu();
+				nack_received = true;
+				Trame nack(TypeCommunication::Nack, 0, recepteur.getNumeroSequenceAttendu(), nullptr);
+				sendTrame(nack);
 			}
 			break;
 		}
