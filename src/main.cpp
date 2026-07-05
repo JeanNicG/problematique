@@ -23,7 +23,7 @@ const char *donnees_txt[TOTAL_PAQUETS] = {
 
 volatile bool nack_received = false;
 volatile uint8_t nack_sequence = 0;
-bool ENABLE_ERROR_SIMULATION = true;
+bool ENABLE_ERROR_SIMULATION = false;
 bool simulate_error = ENABLE_ERROR_SIMULATION;
 int target_packet_error = 3;
 
@@ -43,8 +43,7 @@ void IRAM_ATTR rx_gpio_isr() {
 }
 
 void sendTrame(const Trame &trame) {
-	printTrame("[TX]", trame);
-	Serial.flush();
+	//printTrame("[TX]", trame);
 
 	const uint8_t *trame_bytes = reinterpret_cast<const uint8_t *>(&trame);
 	const size_t trame_size = sizeof(Trame);
@@ -160,6 +159,9 @@ Trame receiveTrame() {
 
 // Core 1
 void txTask(void *pvParameters) {
+	pinMode(TX_PIN, OUTPUT);
+	digitalWrite(TX_PIN, LOW);
+
 	Emetteur emetteur(TOTAL_PAQUETS, donnees_txt);
 	while (1) {
 		switch (emetteur.getEtat()) {
@@ -210,6 +212,9 @@ void txTask(void *pvParameters) {
 
 // Core 0
 void rxTask(void *pvParameters) {
+	pinMode(RX_PIN, INPUT);
+	attachInterrupt(digitalPinToInterrupt(RX_PIN), rx_gpio_isr, CHANGE);
+
 	Recepteur recepteur;
 
 	while (1) {
@@ -277,12 +282,6 @@ void setup() {
 	Serial.setTxBufferSize(2048);
 	Serial.begin(115200);
 	delay(1000);
-
-	pinMode(TX_PIN, OUTPUT);
-	digitalWrite(TX_PIN, LOW);
-
-	pinMode(RX_PIN, INPUT);
-	attachInterrupt(digitalPinToInterrupt(RX_PIN), rx_gpio_isr, CHANGE);
 
 	xTaskCreatePinnedToCore(txTask, "TX_Task", 8192, NULL, 1, NULL, 1);
 	xTaskCreatePinnedToCore(rxTask, "RX_Task", 8192, NULL, 1, NULL, 0);
