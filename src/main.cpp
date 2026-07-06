@@ -136,9 +136,6 @@ Trame receiveTrame() {
 				break;
 			}
 		} else {
-			if (esp_timer_get_time() - wait_start > 1500000) {
-				return Trame(TypeCommunication::Debut, 0, 0, nullptr);
-			}
 			if (trame_started && rx_edge_count > 0 && (esp_timer_get_time() - rx_edge_times[rx_edge_count - 1] > 200)) {
 				trame_complete = true;
 				break;
