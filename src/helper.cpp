@@ -51,8 +51,8 @@ void printBytes(const uint8_t* data, size_t length) {
 }
 
 void printTrame(const char* tag, const Trame& trame) {
-    Serial.printf(
-        "%s type=%s seq=%u volume=%u payload_len=%u crc=0x%04X\n",
+    Serial.printf("[%u ms] %s type=%s seq=%u volume=%u payload_len=%u crc=0x%04X\n",
+        (uint32_t)(esp_timer_get_time() / 1000),
         tag,
         typeToString(trame.entete.type),
         trame.entete.numero_sequence,
@@ -68,4 +68,9 @@ void printTrame(const char* tag, const Trame& trame) {
         Serial.write(trame.payload[i]);
     }
     Serial.println();
+    
+    if (trame.entete.type == TypeCommunication::Data) {
+        Serial.print("  payload hex: ");
+        printBytes(trame.payload, sizeof(trame.payload));
+    }
 }
