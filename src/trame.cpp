@@ -1,3 +1,9 @@
+/*
+Auteur: Jean-Nicolas Gosselin et Anahì Michelle Mongelos Toledo
+CIP: gosj2008 et mona3503
+Date: 7 Juillet 2026
+*/
+
 #include <Arduino.h>
 #include "trame.h"
 #include "esp_rom_crc.h"

@@ -1,3 +1,9 @@
+/*
+Auteur: Jean-Nicolas Gosselin et Anahì Michelle Mongelos Toledo
+CIP: gosj2008 et mona3503
+Date: 7 Juillet 2026
+*/
+
 #include "fsm.h"
 
 Emetteur::Emetteur(uint8_t volume, const char* const* packets) : volume(volume), packets(packets) {}
