@@ -1,16 +1,18 @@
-#include "driver/gpio.h"
-#include "fsm.h"
-#include "trame.h"
-#include "helper.h"
-#include "esp_rom_crc.h"
 #include <Arduino.h>
-
 #include <cstring>
+#include "driver/gpio.h"
+#include "esp_rom_crc.h"
+#include "trame.h"
+#include "fsm.h"
+#include "helper.h"
 
 #define HALF_BIT_US 10
-
 #define TX_PIN GPIO_NUM_21
 #define RX_PIN GPIO_NUM_22
+
+const bool IS_EMETTEUR = false; // tx == true, rx == true
+const bool ENABLE_ERROR_SIMULATION = false;
+const int TARGET_PACKET_ERROR = 3;
 
 const uint8_t TOTAL_PAQUETS = 5;
 const char *donnees_txt[TOTAL_PAQUETS] = {
@@ -21,38 +23,25 @@ const char *donnees_txt[TOTAL_PAQUETS] = {
   "Ligne 5 - 2026-06-17 10:20:01 | Temp: 23.0 C | Humidite: 45.0 % | Node: 01"
 };
 
-SemaphoreHandle_t tx_mutex;
-
+SemaphoreHandle_t nack_mutex;
 volatile bool nack_received = false;
 volatile uint8_t nack_sequence = 0;
-bool ENABLE_ERROR_SIMULATION = false;
-bool simulate_error = ENABLE_ERROR_SIMULATION;
-int target_packet_error = 3;
 
-void IRAM_ATTR gestionnaireSignal() { nack_received = true; }
 
 // 89*2*8 ~= 1500 edges
 volatile uint32_t rx_edge_times[1500];
 volatile int rx_edge_count = 0;
-volatile uint32_t rx_last_edge_time = 0;
-
 void IRAM_ATTR rx_gpio_isr() {
-	uint32_t now = esp_timer_get_time();
 	if (rx_edge_count < 1500) {
-		rx_edge_times[rx_edge_count++] = now;
+		rx_edge_times[rx_edge_count++] = esp_timer_get_time();;
 	}
-	rx_last_edge_time = now;
 }
 
 void sendTrame(const Trame &trame) {
-	if (tx_mutex != NULL) {
-		xSemaphoreTake(tx_mutex, portMAX_DELAY);
-	}
-	//printTrame("[TX]", trame);
+	logTxTrame(trame, IS_EMETTEUR);
 
 	const uint8_t *trame_bytes = reinterpret_cast<const uint8_t *>(&trame);
 	const size_t trame_size = sizeof(Trame);
-
 	uint32_t cycles_per_half_bit = ESP.getCpuFreqMHz() * HALF_BIT_US;
 	
 	noInterrupts();
@@ -81,13 +70,8 @@ void sendTrame(const Trame &trame) {
 			}
 		}
 	}
-	
 	GPIO.out_w1tc = (1 << TX_PIN);
 	interrupts();
-	
-	if (tx_mutex != NULL) {
-		xSemaphoreGive(tx_mutex);
-	}
 }
 
 Trame receiveTrame() {
@@ -155,50 +139,56 @@ Trame receiveTrame() {
 			if (esp_timer_get_time() - wait_start > 1500000) {
 				return Trame(TypeCommunication::Debut, 0, 0, nullptr);
 			}
+			if (trame_started && rx_edge_count > 0 && (esp_timer_get_time() - rx_edge_times[rx_edge_count - 1] > 200)) {
+				trame_complete = true;
+				break;
+			}
 			vTaskDelay(pdMS_TO_TICKS(1));
 		}
 	}
 
 	Trame trame = *reinterpret_cast<Trame *>(raw_trame);
-	printTrame("[RX]", trame);
+	logRxTrame(trame, IS_EMETTEUR);
 	return trame;
 }
 
 // Core 1
 void txTask(void *pvParameters) {
-	pinMode(TX_PIN, OUTPUT);
-	digitalWrite(TX_PIN, LOW);
-
 	Emetteur emetteur(TOTAL_PAQUETS, donnees_txt);
+	bool simulate_error = ENABLE_ERROR_SIMULATION;
+	
 	while (1) {
 		switch (emetteur.getEtat()) {
 			case EtatEmetteur::Initialisation: {
 				Trame trame_debut(TypeCommunication::Debut, 0, TOTAL_PAQUETS, nullptr);
 				sendTrame(trame_debut);
-				vTaskDelay(pdMS_TO_TICKS(50));
+				vTaskDelay(pdMS_TO_TICKS(35));
 				emetteur.handleEvent({EventTypeEmetteur::DemarrerSession, {}});
 				break;
 			}
 			case EtatEmetteur::FluxContinu: {
 				while (emetteur.getNumeroSequence() < TOTAL_PAQUETS) {
+					xSemaphoreTake(nack_mutex, portMAX_DELAY);
 					if (nack_received) {
 						nack_received = false;
 						emetteur.handleEvent({EventTypeEmetteur::NackIntercepte, {nack_sequence}});
-						vTaskDelay(pdMS_TO_TICKS(60));
+						xSemaphoreGive(nack_mutex);
+						vTaskDelay(pdMS_TO_TICKS(35));
 						break;
 					}
+					xSemaphoreGive(nack_mutex);
 					uint8_t payload[80] = {0};
 					strncpy(reinterpret_cast<char *>(payload),donnees_txt[emetteur.getNumeroSequence()], 80);
 					Trame trame(TypeCommunication::Data, emetteur.getNumeroSequence() + 1, TOTAL_PAQUETS, payload);
 					
-					if (simulate_error && (emetteur.getNumeroSequence() + 1) == target_packet_error) {
+					if (simulate_error && (emetteur.getNumeroSequence() + 1) == TARGET_PACKET_ERROR) {
 						trame.payload[random(80)] ^= (1 << random(8));
 						simulate_error = false;
 					}
 					
 					sendTrame(trame);
 					emetteur.setNumeroSequence(emetteur.getNumeroSequence() + 1);
-					vTaskDelay(pdMS_TO_TICKS(50));
+					vTaskDelay(pdMS_TO_TICKS(35));
 				}
 				if (emetteur.getNumeroSequence() >= TOTAL_PAQUETS) {
 					emetteur.handleEvent({EventTypeEmetteur::TousPaquetsValides, {}});
@@ -220,8 +210,17 @@ void txTask(void *pvParameters) {
 
 // Core 0
 void rxTask(void *pvParameters) {
-	pinMode(RX_PIN, INPUT);
-	attachInterrupt(digitalPinToInterrupt(RX_PIN), rx_gpio_isr, CHANGE);
+	if (IS_EMETTEUR) {
+		while (1) {
+			Trame trame = receiveTrame();
+			if (trame.entete.type == TypeCommunication::Nack) {
+				xSemaphoreTake(nack_mutex, portMAX_DELAY);
+				nack_sequence = trame.entete.volume;
+				nack_received = true;
+				xSemaphoreGive(nack_mutex);
+			}
+		}
+	}
 
 	Recepteur recepteur;
 
@@ -239,8 +238,10 @@ void rxTask(void *pvParameters) {
 		case EtatRecepteur::ReceptionContinue: {
 			Trame trame = receiveTrame();
 			if (trame.entete.type == TypeCommunication::Nack) {
+				xSemaphoreTake(nack_mutex, portMAX_DELAY);
 				nack_sequence = trame.entete.volume;
 				nack_received = true;
+				xSemaphoreGive(nack_mutex);
 			}
 			else if (trame.entete.type == TypeCommunication::Data) {
 				if (trame.entete.numero_sequence != recepteur.getNumeroSequenceAttendu() || 
@@ -264,8 +265,10 @@ void rxTask(void *pvParameters) {
 		case EtatRecepteur::AttenteDeCorrection: {
 			Trame trame_corrigee = receiveTrame();
 			if (trame_corrigee.entete.type == TypeCommunication::Nack) {
+				xSemaphoreTake(nack_mutex, portMAX_DELAY);
 				nack_sequence = trame_corrigee.entete.volume;
 				nack_received = true;
+				xSemaphoreGive(nack_mutex);
 			}
 			else if (trame_corrigee.entete.numero_sequence == recepteur.getNumeroSequenceAttendu() &&
 				trame_corrigee.crc16 == esp_rom_crc16_be(0, trame_corrigee.payload, 80)) {
@@ -287,9 +290,16 @@ void setup() {
 	Serial.begin(115200);
 	delay(1000);
 
-	tx_mutex = xSemaphoreCreateMutex();
+	nack_mutex = xSemaphoreCreateMutex();
+	pinMode(TX_PIN, OUTPUT);
+	digitalWrite(TX_PIN, LOW);
+	pinMode(RX_PIN, INPUT);
 
+	attachInterrupt(digitalPinToInterrupt(RX_PIN), rx_gpio_isr, CHANGE);
+
+	if (IS_EMETTEUR) {
 	xTaskCreatePinnedToCore(txTask, "TX_Task", 8192, NULL, 1, NULL, 1);
+	}
 	xTaskCreatePinnedToCore(rxTask, "RX_Task", 8192, NULL, 1, NULL, 0);
 
 	Serial.println("Setup Done");

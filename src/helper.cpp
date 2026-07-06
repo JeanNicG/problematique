@@ -22,6 +22,7 @@ void printBitrate() {
     Serial.printf("Payload Bitrate: %.2f bps\n", (total_payload_bytes * 8) / duration_s);
     Serial.printf("Raw Bitrate: %.2f bps\n\n", (total_trame_bytes * 8) / duration_s);
 }
+
 const char* typeToString(TypeCommunication type) {
     switch (type) {
         case TypeCommunication::Debut:
@@ -37,22 +38,9 @@ const char* typeToString(TypeCommunication type) {
     }
 }
 
-void printBytes(const uint8_t* data, size_t length) {
-    for (size_t i = 0; i < length; ++i) {
-        if (data[i] < 0x10) {
-            Serial.print('0');
-        }
-        Serial.print(data[i], HEX);
-        if (i + 1 < length) {
-            Serial.print(' ');
-        }
-    }
-    Serial.println();
-}
-
 void printTrame(const char* tag, const Trame& trame) {
     Serial.printf(
-        "%s type=%s seq=%u volume=%u payload_len=%u crc=0x%04X\n",
+        "%s type=%s seq=%u volume=%u payload_len=%u crc=0x%04X",
         tag,
         typeToString(trame.entete.type),
         trame.entete.numero_sequence,
@@ -60,12 +48,43 @@ void printTrame(const char* tag, const Trame& trame) {
         trame.entete.longueur_payload,
         trame.crc16
     );
-    Serial.print("  payload text: ");
-    for (size_t i = 0; i < sizeof(trame.payload); ++i) {
-        if (trame.payload[i] == 0) {
-            break;
+    if (trame.entete.type == TypeCommunication::Data){
+        Serial.print("\n  payload text: ");
+        for (size_t i = 0; i < sizeof(trame.payload); ++i) {
+            if (trame.payload[i] == 0) {
+                break;
+            }
+            Serial.write(trame.payload[i]);
         }
-        Serial.write(trame.payload[i]);
     }
     Serial.println();
+    if (trame.entete.type == TypeCommunication::Fin) {
+        Serial.println();
+    }
+}
+
+void logTxTrame(const Trame& trame, bool is_emetteur) {
+    if (is_emetteur) {
+        if (trame.entete.type != TypeCommunication::Nack) {
+            printTrame("[TX]", trame);
+        }
+    } else {
+        if (trame.entete.type == TypeCommunication::Nack) {
+            printTrame("[TX]", trame);
+        }
+    }
+}
+
+void logRxTrame(const Trame& trame, bool is_emetteur) {
+    if (is_emetteur) {
+        if (trame.entete.type == TypeCommunication::Nack) {
+            printTrame("[RX]", trame);
+        }
+    } else {
+        if (trame.entete.type == TypeCommunication::Data || 
+            trame.entete.type == TypeCommunication::Debut || 
+            trame.entete.type == TypeCommunication::Fin) {
+            printTrame("[RX]", trame);
+        }
+    }
 }
